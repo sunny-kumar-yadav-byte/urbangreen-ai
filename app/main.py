@@ -1,7 +1,8 @@
 import logging
 from typing import Dict, Any, Optional
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, status, Request
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .config import WEIGHTS, PROJECT_ROOT
 from .schemas import (
@@ -59,7 +60,12 @@ _LATEST_ANALYSIS: Dict[str, Any] = {
 }
 
 @app.get("/", tags=["System"])
-def home():
+def home(request: Request):
+    accept = request.headers.get("accept", "")
+    # If opened by a web browser, redirect directly to the interactive frontend dashboard
+    if "text/html" in accept and "application/json" not in accept:
+        return RedirectResponse(url="/ui")
+
     gee_ready, gee_msg = gee_provider.is_available()
     return {
         "message": "UrbanGreen AI API",

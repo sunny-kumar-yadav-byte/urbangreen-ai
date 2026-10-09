@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+fastapi
+uvicorn[standard]
+pytest
+httpx
+shapely
+pyproj
+earthengine-api
+requests
+python-dotenv

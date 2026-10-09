@@ -1,0 +1,159 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UrbanGreen AI | Sustainable City Analysis</title>
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+
+<header class="navbar">
+    <a class="brand" href="#">
+        <div class="logo">UG</div>
+        <div>
+            <h2>UrbanGreen AI</h2>
+            <p>Sustainable Urban Analysis</p>
+        </div>
+    </a>
+    <span class="hackathon">IEEE Hackathon 2026</span>
+</header>
+
+<main>
+    <section class="hero">
+        <div class="hero-content">
+            <span class="tag">SUSTAINABLE LIVING</span>
+            <h1>Understand your city's <span>urban environment.</span></h1>
+            <p>Explore urban heat, vegetation, built-up areas and environmental priority zones.</p>
+
+            <form id="cityForm">
+                <div class="search-box">
+                    <input id="cityInput" type="text" placeholder="Enter city name, e.g. Bhopal" required>
+                    <button id="analyzeBtn" type="submit">Analyze City</button>
+                </div>
+            </form>
+            <p id="status" role="status"></p>
+        </div>
+
+        <div class="hero-visual">
+            <div class="visual-step"><span>01</span><div><strong>Choose a city</strong><small>Enter any supported city</small></div></div>
+            <div class="visual-step"><span>02</span><div><strong>Analyze environment</strong><small>Review available city data</small></div></div>
+            <div class="visual-step"><span>03</span><div><strong>Explore grid cells</strong><small>Inspect priority locations</small></div></div>
+        </div>
+    </section>
+
+    <section id="emptyState" class="empty-state">
+        <div class="empty-icon">⌖</div>
+        <h2>Ready to analyze a city?</h2>
+        <p>Enter a city name above to see the dashboard and priority zones.</p>
+    </section>
+
+    <section id="dashboard" class="dashboard hidden">
+        <div class="dashboard-header">
+            <div>
+                <span class="section-label">CITY ANALYSIS</span>
+                <h2 id="cityName">City</h2>
+                <p id="analysisStatus">Waiting for analysis</p>
+            </div>
+            <span class="status-badge">UrbanGreen AI</span>
+        </div>
+
+        <div class="stats-grid">
+            <article class="stat-card"><span>AVERAGE LST</span><strong id="avgLST">--</strong><small>Land surface temperature</small></article>
+            <article class="stat-card"><span>AVERAGE NDVI</span><strong id="avgNDVI">--</strong><small>Vegetation index</small></article>
+            <article class="stat-card"><span>HIGH PRIORITY</span><strong id="highPriority">--</strong><small>Zones identified</small></article>
+            <article class="stat-card"><span>PRIORITY INDEX</span><strong id="priorityIndex">--</strong><small>Overall priority</small></article>
+        </div>
+
+        <div class="section-heading">
+            <div><span class="section-label">ENVIRONMENTAL FACTORS</span><h3>What is affecting the city?</h3></div>
+        </div>
+
+        <div class="factor-grid">
+            <article class="factor-card"><div class="factor-icon heat">°C</div><div><h3>Urban Heat</h3><p>Land surface temperature</p></div><strong id="factorHeat">--</strong></article>
+            <article class="factor-card"><div class="factor-icon green">🌿</div><div><h3>Vegetation</h3><p>NDVI index</p></div><strong id="factorNDVI">--</strong></article>
+            <article class="factor-card"><div class="factor-icon built">▦</div><div><h3>Built-up Index</h3><p>Built-up signal</p></div><strong id="factorBuilt">--</strong></article>
+            <article class="factor-card"><div class="factor-icon road">↔</div><div><h3>Road Density</h3><p>Road feature proxy</p></div><strong id="factorRoad">--</strong></article>
+        </div>
+
+        <section class="zone-section">
+            <div class="section-heading">
+                <div><span class="section-label">PRIORITY ANALYSIS</span><h3>Selected Priority Zone</h3></div>
+            </div>
+
+            <article class="zone-card">
+                <div class="zone-top">
+                    <div>
+                        <span class="zone-label">SELECTED ZONE</span>
+                        <h3 id="zoneTitle">--</h3>
+                        <p id="zoneLocation">--</p>
+                    </div>
+                    <span id="priorityBadge" class="priority-badge">--</span>
+                </div>
+
+                <div class="zone-location">
+                    <div class="location-item"><span>LOCALITY</span><strong id="zoneLocality">--</strong></div>
+                    <div class="location-item"><span>COORDINATES</span><strong id="zoneCoordinates">--</strong></div>
+                    <div class="location-item"><span>ORIGINAL GRID</span><strong id="zoneGridSize">500m × 500m</strong></div>
+                </div>
+
+                <div class="satellite-section">
+                    <div class="section-heading compact">
+                        <div><span class="section-label">DETAILED MAP</span><h3>Explore 100m × 100m Cells</h3></div>
+                    </div>
+
+                    <p class="map-note">Select a high-priority zone below or use this button to open its detailed grid.</p>
+                    <div class="map-actions">
+                        <button id="viewDetailedGrid" type="button">View Detailed Grid</button>
+                        <button id="closeDetailedGrid" type="button" class="secondary-button">Close Map</button>
+                    </div>
+
+                    <div id="detailedGridPanel" class="detailed-grid-panel hidden">
+                        <div class="map-heading">
+                            <div><h4 id="gridMapTitle">Detailed Zone Grid</h4><p>Click a cell to inspect its location.</p></div>
+                            <span class="grid-count">25 cells</span>
+                        </div>
+                        <div id="detailedGridMap" aria-label="Interactive priority zone grid map"></div>
+                        <div id="selectedCellInfo" class="cell-info">Select a grid cell to see its coordinates.</div>
+                    </div>
+
+                    <div class="satellite-image-container">
+                        <img id="zoneSatellite" src="" alt="Satellite view of selected priority zone">
+                        <div id="satellitePlaceholder" class="satellite-placeholder">Satellite image is unavailable unless the backend provides a valid image URL.</div>
+                    </div>
+                </div>
+
+                <div class="metrics-grid">
+                    <div class="metric"><span>LST</span><strong id="zoneLST">--</strong></div>
+                    <div class="metric"><span>NDVI</span><strong id="zoneNDVI">--</strong></div>
+                    <div class="metric"><span>BUILT-UP</span><strong id="zoneBuilt">--</strong></div>
+                    <div class="metric"><span>ROAD DENSITY</span><strong id="zoneRoad">--</strong></div>
+                    <div class="metric"><span>PRIORITY SCORE</span><strong id="zoneScore">--</strong></div>
+                </div>
+
+                <div class="recommendation"><span>RECOMMENDATION</span><p id="recommendation">--</p></div>
+            </article>
+        </section>
+
+        <section class="priority-zones-section">
+            <div class="section-heading">
+                <div><span class="section-label">PRIORITY ZONES</span><h3>High-Priority Areas</h3></div>
+            </div>
+            <p class="map-note">Click a zone card to select it and open its detailed grid.</p>
+            <div id="priorityZonesList" class="priority-zones-list"></div>
+        </section>
+    </section>
+</main>
+
+<footer>
+    <strong>UrbanGreen AI</strong>
+    <span>IEEE Hackathon 2026 · Sustainable Living</span>
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

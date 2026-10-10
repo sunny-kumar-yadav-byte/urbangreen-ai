@@ -1,5 +1,6 @@
 import math
 import logging
+import concurrent.futures
 from typing import List, Tuple, Optional, Any
 import httpx
 import numpy as np
@@ -120,36 +121,50 @@ class OpenGeospatialProvider(SatelliteDataProvider):
     def _query_overpass_building_elements(
         self,
         bbox: Tuple[float, float, float, float],
-        timeout: float = 30.0
+        timeout: float = 8.0
     ) -> Tuple[List[dict], bool, Optional[str], Optional[int]]:
         """
         Executes a single Overpass QL query for buildings in the given bounding box.
-        Uses timeout:25 in Overpass QL and timeout:30.0 for the HTTP client.
+        Uses timeout:6 in Overpass QL and timeout:8.0 for the HTTP client.
+        Supports fast mirror failover (lz4.overpass-api.de -> OVERPASS_API_URL).
         Returns: (elements, success_flag, error_message, http_status_code)
         """
         min_lon, min_lat, max_lon, max_lat = bbox
         query = f"""
-        [out:json][timeout:25];
+        [out:json][timeout:6];
         way["building"]({min_lat},{min_lon},{max_lat},{max_lon});
         out geom;
         """
         headers = {"User-Agent": NOMINATIM_USER_AGENT, "Accept": "application/json"}
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(OVERPASS_API_URL, data={"data": query}, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("elements", []), True, None, 200
-                elif resp.status_code == 429:
-                    return [], False, "Overpass API rate limit reached (HTTP 429).", 429
-                elif resp.status_code == 504:
-                    return [], False, "Overpass API gateway timeout (HTTP 504).", 504
-                else:
-                    return [], False, f"Overpass API returned HTTP {resp.status_code}.", resp.status_code
-        except httpx.TimeoutException:
-            return [], False, "Overpass API gateway timeout.", 504
-        except Exception as exc:
-            return [], False, f"Overpass connection error: {str(exc)}", None
+        endpoints = [
+            "https://lz4.overpass-api.de/api/interpreter",
+            OVERPASS_API_URL,
+        ]
+        if OVERPASS_API_URL not in endpoints:
+            endpoints.append(OVERPASS_API_URL)
+
+        last_err = None
+        last_status = None
+
+        for ep in endpoints:
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(ep, data={"data": query}, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data.get("elements", []), True, None, 200
+                    elif resp.status_code == 429:
+                        last_err, last_status = "Overpass API rate limit reached (HTTP 429).", 429
+                    elif resp.status_code == 504:
+                        last_err, last_status = "Overpass API gateway timeout (HTTP 504).", 504
+                    else:
+                        last_err, last_status = f"Overpass API returned HTTP {resp.status_code}.", resp.status_code
+            except httpx.TimeoutException:
+                last_err, last_status = "Overpass API gateway timeout.", 504
+            except Exception as exc:
+                last_err, last_status = f"Overpass connection error: {str(exc)}", None
+
+        return [], False, last_err, last_status
 
     def _parse_building_elements(
         self,
@@ -184,12 +199,12 @@ class OpenGeospatialProvider(SatelliteDataProvider):
     def _fetch_buildings_via_quadrants(
         self,
         bbox: Tuple[float, float, float, float],
-        timeout: float = 30.0
+        timeout: float = 8.0
     ) -> Tuple[List[Polygon], bool, Optional[str]]:
         """
-        Subdivides the bounding box into four non-overlapping quadrants, queries each,
-        deduplicates building geometries along boundaries by OSM element ID, and
-        records any quadrant failures.
+        Subdivides the bounding box into four non-overlapping quadrants, queries each
+        concurrently in parallel, deduplicates building geometries along boundaries by
+        OSM element ID, and records any quadrant failures.
         """
         quads = split_bbox_into_quadrants(bbox)
         poly_dict: dict[Any, Polygon] = {}
@@ -197,8 +212,15 @@ class OpenGeospatialProvider(SatelliteDataProvider):
         failed_quads: List[str] = []
         quad_errors: List[str] = []
 
-        for q_name, q_bbox in quads:
+        def _fetch_single_quad(item):
+            q_name, q_bbox = item
             q_elems, q_ok, q_err, _ = self._query_overpass_building_elements(q_bbox, timeout=timeout)
+            return q_name, q_elems, q_ok, q_err
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            quad_results = list(executor.map(_fetch_single_quad, quads))
+
+        for q_name, q_elems, q_ok, q_err in quad_results:
             if q_ok:
                 succeeded_quads.append(q_name)
                 self._parse_building_elements(q_elems, poly_dict)
@@ -225,7 +247,7 @@ class OpenGeospatialProvider(SatelliteDataProvider):
     def _fetch_osm_buildings(
         self,
         bbox: Tuple[float, float, float, float],
-        timeout: float = 30.0
+        timeout: float = 8.0
     ) -> Tuple[List[Polygon], bool, Optional[str]]:
         """
         Retrieves real building polygon geometries from OpenStreetMap Overpass.
@@ -265,45 +287,59 @@ class OpenGeospatialProvider(SatelliteDataProvider):
     def _fetch_osm_roads(
         self,
         bbox: Tuple[float, float, float, float],
-        timeout: float = 12.0
+        timeout: float = 8.0
     ) -> Tuple[List[LineString], bool, Optional[str]]:
         """
         Retrieves real road network LineStrings from OpenStreetMap Overpass.
+        Supports fast mirror failover (lz4.overpass-api.de -> OVERPASS_API_URL).
         Returns: (road_linestrings, success_flag, error_or_warning_message)
         """
         min_lon, min_lat, max_lon, max_lat = bbox
         query = f"""
-        [out:json][timeout:15];
+        [out:json][timeout:6];
         way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|service|living_street"]({min_lat},{min_lon},{max_lat},{max_lon});
         out geom;
         """
         headers = {"User-Agent": NOMINATIM_USER_AGENT, "Accept": "application/json"}
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(OVERPASS_API_URL, data={"data": query}, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    elements = data.get("elements", [])
-                    lines = []
-                    for elem in elements:
-                        geom_pts = elem.get("geometry", [])
-                        if len(geom_pts) >= 2:
-                            coords = [(pt["lon"], pt["lat"]) for pt in geom_pts]
-                            try:
-                                line = LineString(coords)
-                                if line.is_valid and not line.is_empty:
-                                    lines.append(line)
-                            except Exception:
-                                continue
-                    return lines, True, None
-                elif resp.status_code == 429:
-                    return [], False, "Overpass API rate limit reached (HTTP 429)."
-                else:
-                    return [], False, f"Overpass API returned HTTP {resp.status_code}."
-        except httpx.TimeoutException:
-            return [], False, "Overpass API gateway timeout."
-        except Exception as exc:
-            return [], False, f"Overpass connection error: {str(exc)}"
+        endpoints = [
+            "https://lz4.overpass-api.de/api/interpreter",
+            OVERPASS_API_URL,
+        ]
+        if OVERPASS_API_URL not in endpoints:
+            endpoints.append(OVERPASS_API_URL)
+
+        last_err = None
+        for ep in endpoints:
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(ep, data={"data": query}, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        elements = data.get("elements", [])
+                        lines = []
+                        for elem in elements:
+                            geom_pts = elem.get("geometry", [])
+                            if len(geom_pts) >= 2:
+                                coords = [(pt["lon"], pt["lat"]) for pt in geom_pts]
+                                try:
+                                    line = LineString(coords)
+                                    if line.is_valid and not line.is_empty:
+                                        lines.append(line)
+                                except Exception:
+                                    continue
+                        return lines, True, None
+                    elif resp.status_code == 429:
+                        last_err = "Overpass API rate limit reached (HTTP 429)."
+                    elif resp.status_code == 504:
+                        last_err = "Overpass API gateway timeout (HTTP 504)."
+                    else:
+                        last_err = f"Overpass API returned HTTP {resp.status_code}."
+            except httpx.TimeoutException:
+                last_err = "Overpass API gateway timeout."
+            except Exception as exc:
+                last_err = f"Overpass connection error: {str(exc)}"
+
+        return [], False, last_err
 
     def acquire_features(
         self,
@@ -319,13 +355,19 @@ class OpenGeospatialProvider(SatelliteDataProvider):
         # 1. Projector to metres (UTM or local metric projection)
         project_to_m = get_metric_projector(center_lon, center_lat)
 
-        # 2. Fetch real surface temperatures
+        # 2, 3, 4. Concurrently fetch temperatures, buildings, and road network
         lats = [c.centroid_lat for c in grid_cells]
         lons = [c.centroid_lon for c in grid_cells]
-        real_temps = self._fetch_real_surface_temperatures(lats, lons)
 
-        # 3. Fetch real OpenStreetMap buildings
-        buildings, b_ok, b_err = self._fetch_osm_buildings(bbox)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            fut_temps = executor.submit(self._fetch_real_surface_temperatures, lats, lons)
+            fut_buildings = executor.submit(self._fetch_osm_buildings, bbox)
+            fut_roads = executor.submit(self._fetch_osm_roads, bbox)
+
+            real_temps = fut_temps.result()
+            buildings, b_ok, b_err = fut_buildings.result()
+            roads, r_ok, r_err = fut_roads.result()
+
         if not b_ok:
             warnings.append(f"OSM Buildings query failed: {b_err}. Falling back to estimated building density.")
         else:
@@ -334,8 +376,6 @@ class OpenGeospatialProvider(SatelliteDataProvider):
             if len(buildings) == 0:
                 warnings.append("OSM returned 0 building features in this area. Calculated building coverage is 0.0.")
 
-        # 4. Fetch real OpenStreetMap road network
-        roads, r_ok, r_err = self._fetch_osm_roads(bbox)
         if not r_ok:
             warnings.append(f"OSM Road network query failed: {r_err}. Falling back to estimated road density.")
         elif len(roads) == 0:
@@ -364,21 +404,17 @@ class OpenGeospatialProvider(SatelliteDataProvider):
                 if b_tree and len(buildings) > 0:
                     candidate_indices = b_tree.query(cell.polygon, predicate="intersects")
                     if len(candidate_indices) > 0:
-                        intersections = []
+                        total_built_m2 = 0.0
                         for idx in candidate_indices:
                             b_poly = buildings[idx]
                             try:
                                 inter = b_poly.intersection(cell.polygon)
                                 if not inter.is_empty:
                                     inter_m = project_to_m(inter)
-                                    intersections.append(inter_m)
+                                    total_built_m2 += inter_m.area
                             except Exception:
                                 continue
-                        if intersections:
-                            total_built_m2 = unary_union(intersections).area
-                            built_up = round(min(1.0, max(0.0, total_built_m2 / cell_area_m2)), 4)
-                        else:
-                            built_up = 0.0
+                        built_up = round(min(1.0, max(0.0, total_built_m2 / cell_area_m2)), 4)
                     else:
                         built_up = 0.0
                 else:

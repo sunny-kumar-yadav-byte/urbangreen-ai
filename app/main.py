@@ -59,6 +59,37 @@ _LATEST_ANALYSIS: Dict[str, Any] = {
     "metadata": None
 }
 
+def generate_satellite_imagery_url(lat: float, lon: float, polygon_coords: Optional[list] = None) -> str:
+    """
+    Generates a high-resolution satellite imagery URL from Esri World Imagery Export API
+    for the specified zone coordinates or polygon boundary.
+    """
+    if polygon_coords and len(polygon_coords) > 0 and len(polygon_coords[0]) > 0:
+        ring = polygon_coords[0]
+        p_lons = [pt[0] for pt in ring]
+        p_lats = [pt[1] for pt in ring]
+        min_lon = min(p_lons)
+        max_lon = max(p_lons)
+        min_lat = min(p_lats)
+        max_lat = max(p_lats)
+        pad_lon = max((max_lon - min_lon) * 0.15, 0.001)
+        pad_lat = max((max_lat - min_lat) * 0.15, 0.001)
+        b_min_lon = round(min_lon - pad_lon, 6)
+        b_max_lon = round(max_lon + pad_lon, 6)
+        b_min_lat = round(min_lat - pad_lat, 6)
+        b_max_lat = round(max_lat + pad_lat, 6)
+    else:
+        delta = 0.0035
+        b_min_lon = round(lon - delta, 6)
+        b_max_lon = round(lon + delta, 6)
+        b_min_lat = round(lat - delta, 6)
+        b_max_lat = round(lat + delta, 6)
+
+    return (
+        f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?"
+        f"bbox={b_min_lon},{b_min_lat},{b_max_lon},{b_max_lat}&bboxSR=4326&imageSR=4326&size=800,500&format=jpg&f=image"
+    )
+
 @app.get("/", tags=["System"])
 def home(request: Request):
     accept = request.headers.get("accept", "")
@@ -214,7 +245,7 @@ def analyze_city(request: AnalyzeRequest):
             road_density=indicators.get("road_density"),
             priority=str(r["category"]).upper(),
             recommendation=single_rec,
-            satellite_url=None
+            satellite_url=generate_satellite_imagery_url(float(r["lat"]), float(r["lon"]), poly_coords)
         ))
 
     # Priority zones for frontend display
@@ -314,7 +345,7 @@ def ingest_custom_gis(request: IngestCustomZonesRequest):
             road_density=indicators.get("road_density"),
             priority=str(r["category"]).upper(),
             recommendation=single_rec,
-            satellite_url=None
+            satellite_url=generate_satellite_imagery_url(float(r["lat"]), float(r["lon"]), cell_polygons.get(zid))
         ))
 
     high_p_zones = [z for z in zones if z.category == "High"]

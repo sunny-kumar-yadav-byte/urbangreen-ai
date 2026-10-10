@@ -183,7 +183,7 @@ function selectZone(zone, openGrid) {
     badge.style.background = priorityBackground(priority);
     badge.style.color = priorityColor(priority);
 
-    loadSatelliteImage(zone.satellite_url);
+    loadSatelliteImage(zone.satellite_url, lat, lon);
 
     if (openGrid) {
         openDetailedGrid();
@@ -444,7 +444,7 @@ function drawGrid(zone) {
 
 /* -------------------- SATELLITE IMAGE -------------------- */
 
-function loadSatelliteImage(url) {
+function loadSatelliteImage(url, lat, lon) {
     const image = document.getElementById("zoneSatellite");
     const placeholder = document.getElementById("satellitePlaceholder");
 
@@ -452,9 +452,19 @@ function loadSatelliteImage(url) {
     image.removeAttribute("src");
     placeholder.style.display = "flex";
 
+    // If url is missing or empty, construct high-res Esri satellite imagery URL from coordinates
+    if (!url && Number.isFinite(lat) && Number.isFinite(lon)) {
+        const delta = 0.0035;
+        const minLon = (lon - delta).toFixed(6);
+        const maxLon = (lon + delta).toFixed(6);
+        const minLat = (lat - delta).toFixed(6);
+        const maxLat = (lat + delta).toFixed(6);
+        url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${minLon},${minLat},${maxLon},${maxLat}&bboxSR=4326&imageSR=4326&size=800,500&format=jpg&f=image`;
+    }
+
     if (!url) {
         placeholder.textContent =
-            "Satellite image unavailable: no image URL was provided by the backend.";
+            "Satellite image unavailable: no coordinates or image URL provided.";
         return;
     }
 
